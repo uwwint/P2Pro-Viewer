@@ -35,7 +35,7 @@ class Video:
         available_ids = []
         log.info("Probing video capture ports...")
         while len(non_working_ids) < 6:  # if there are more than 5 non working ports stop the testing.
-            camera = cv2.VideoCapture(dev_port)
+            camera = cv2.VideoCapture(dev_port, cv2.CAP_DSHOW)
             log.info(f"Testing video capture port {dev_port}... ")
             if not camera.isOpened():
                 log.info("Not working.")
