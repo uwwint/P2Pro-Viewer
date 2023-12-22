@@ -4,6 +4,8 @@ import queue
 import logging
 from typing import Union
 
+import P2Pro.P2Pro_cmd as P2Pro_CMD
+
 import cv2
 import numpy as np
 
@@ -15,6 +17,7 @@ P2Pro_fps = 25.0
 P2Pro_usb_id = (0x0bda, 0x5830)  # VID, PID
 
 log = logging.getLogger(__name__)
+log.setLevel(logging.INFO)
 
 class Video:
     # queue 0 is for GUI, 1 is for recorder
@@ -67,11 +70,11 @@ class Video:
         # Fallback that uses the resolution and framerate to identify the device
         working_ids, _, _ = self.list_cap_ids()
         for id in working_ids:
-            if id[1] == P2Pro_resolution and id[2] == P2Pro_fps:
+            if id[1] == P2Pro_resolution: # and id[2] == P2Pro_fps:
                 return id[0]
         return None
 
-    def open(self, camera_id: Union[int, str] = -1):
+    def open(self, cam_cmd: P2Pro_CMD.P2Pro, camera_id: Union[int, str] = -1):
         if camera_id == -1:
             log.info("No camera ID specified, scanning... (This could take a few seconds)")
             camera_id = self.get_P2Pro_cap_id()
@@ -124,6 +127,21 @@ class Video:
                 "yuv_data": yuv_picture,
                 "thermal_data": thermal_picture_16
             }
+
+            cv2.imshow('frame', rgb_picture)
+            key = cv2.waitKey(1)
+            if key & 0xFF == ord('q'):
+                break
+            elif key & 0xFF == ord('s'):
+                cam_cmd.shutter_actuate()
+            elif key & 0xFF == ord('d'):
+                shutter, auto_mode = cam_cmd.get_shutter_state()
+            elif key & 0xFF == ord('b'):
+                cam_cmd.shutter_background()
+            elif key & 0xFF == ord('l'):
+                cam_cmd.gain_set_low()
+            elif key & 0xFF == ord('h'):
+                cam_cmd.gain_set_high()
 
             # populate all queues with new frame
             for queue in self.frame_queue:
