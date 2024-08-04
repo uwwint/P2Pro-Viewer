@@ -142,6 +142,10 @@ class Video:
                 cam_cmd.gain_set_low()
             elif key & 0xFF == ord('h'):
                 cam_cmd.gain_set_high()
+            elif key & 0xFF == ord('m'):
+                cam_cmd.shutter_param_set()
+            elif key & 0xFF == ord('n'):
+                cam_cmd.shutter_params_print()
 
             # populate all queues with new frame
             for queue in self.frame_queue:
