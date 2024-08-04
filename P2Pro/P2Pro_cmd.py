@@ -295,12 +295,12 @@ class P2Pro:
     
     def shutter_param_set(self):
         log.info("Shutter parameter set")
-		# ====================================================================
-		# IMPORTANT NOTICE
-		# only set AutoShutterParams, when being aware of the consequences
-		# use this at your own risk
-		# ====================================================================
-		# the next line is an example on how to deactivate auto shutter update
+        # ====================================================================
+        # IMPORTANT NOTICE
+        # only set AutoShutterParams, when being aware of the consequences
+        # use this at your own risk
+        # ====================================================================
+        # the next line is an example on how to deactivate auto shutter update
         #res = self._long_cmd_write(CmdCode.auto_shutter_params_set, PropAutoShutterParams.SHUTTER_PROP_SWITCH, 0)
     
     def shutter_params_print(self):
