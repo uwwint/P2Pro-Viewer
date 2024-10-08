@@ -36,10 +36,12 @@ try:
 
     time.sleep(5)
     rec.stop()
+    vid.stop()
 
     while True:
         # print(vid.frame_queue[0].get(True, 2)) # test
         time.sleep(0.1)
+
 
 except KeyboardInterrupt:
     print("Killing...")

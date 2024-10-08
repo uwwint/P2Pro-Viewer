@@ -1,7 +1,8 @@
+import platform
 import threading
 import queue
 import time
-import pyaudio
+import sounddevice as sd
 import wave
 import os
 import subprocess
@@ -18,25 +19,29 @@ log = logging.getLogger(__name__)
 class AudioRecorder:
     def __init__(self, path):
         self.WAVE_OUTPUT_FILENAME = path + '.wav'
-        self.CHUNK = 1024
-        self.FORMAT = pyaudio.paInt16
-        self.CHANNELS = 2
+        self.CHUNK = 1024  # Number of frames per buffer
+        self.FORMAT = 'int16'  # SoundDevice uses string format
         self.RATE = 44100
-        self.p = pyaudio.PyAudio()
-        self.stream = self.p.open(format=self.FORMAT,
-                                  channels=self.CHANNELS,
-                                  rate=self.RATE,
-                                  input=True,
-                                  frames_per_buffer=self.CHUNK)
+
+        # Set number of channels based on platform
+        if platform.system() == "Darwin":
+            self.CHANNELS = 1
+        else:
+            self.CHANNELS = 2
+
+        # Prepare to write to the .wav file
         self.wf = wave.open(self.WAVE_OUTPUT_FILENAME, 'wb')
         self.wf.setnchannels(self.CHANNELS)
-        self.wf.setsampwidth(self.p.get_sample_size(self.FORMAT))
+        self.wf.setsampwidth(2)  # 2 bytes for 'int16'
         self.wf.setframerate(self.RATE)
+
         self.recording = False
         self.thread = None
+        self.frames = []  # Buffer for storing the audio data
 
     def start(self):
         self.recording = True
+        # Start the recording thread
         t = threading.Thread(target=self.record)
         t.start()
         self.thread = t
@@ -44,15 +49,30 @@ class AudioRecorder:
     def stop(self):
         self.recording = False
         self.thread.join()
-        self.stream.stop_stream()
-        self.stream.close()
-        self.p.terminate()
+
+        # Write all buffered frames to the wave file
+        self._write_to_wavefile()
+
         self.wf.close()
 
     def record(self):
-        while self.recording:
-            data = self.stream.read(self.CHUNK)
-            self.wf.writeframes(data)
+        # Callback function to handle audio chunks
+        def callback(indata, frames, time, status):
+            if status:
+                print(f"Status: {status}")
+            # Append the recorded frames to the buffer
+            self.frames.append(indata.copy())
+
+        # Open the input stream with the specified format and channels
+        with sd.InputStream(samplerate=self.RATE, channels=self.CHANNELS,
+                            dtype=self.FORMAT, blocksize=self.CHUNK, callback=callback):
+            while self.recording:
+                sd.sleep(100)  # Sleep while the callback processes data
+
+    def _write_to_wavefile(self):
+        # Convert the frames to a single NumPy array and write to the wave file
+        audio_data = np.concatenate(self.frames, axis=0)
+        self.wf.writeframes(audio_data.astype(np.int16).tobytes())
 
 
 class VideoRecorder:

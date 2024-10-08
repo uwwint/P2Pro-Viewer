@@ -2,6 +2,8 @@ import platform
 import time
 import queue
 import logging
+import subprocess
+import re
 from typing import Union
 
 import cv2
@@ -16,11 +18,113 @@ P2Pro_usb_id = (0x0bda, 0x5830)  # VID, PID
 
 log = logging.getLogger(__name__)
 
+
+class FFMpegCapture:
+    def __init__(self, input_source, width, height, framerate=25, convert_rgb=True):
+        self.width = width
+        self.height = height
+        self.framerate = framerate
+        self.convert_rgb = convert_rgb  # Whether to convert to RGB
+
+        # FFmpeg command to capture video from a camera or a video file
+        self.ffmpeg_command = [
+            'ffmpeg',
+            '-f', 'avfoundation',  # Use 'dshow' for Windows or 'v4l2' for Linux
+            '-framerate', str(framerate),
+            '-video_size', f'{width}x{height}',
+            '-i', f"{input_source}",  # Camera index or video file path
+            '-pix_fmt', 'bgr24' if convert_rgb else 'yuyv422',  # Convert to BGR or not
+            '-f', 'rawvideo',
+            '-'
+        ]
+
+        # Start the FFmpeg process with stdout piped
+        self.process = subprocess.Popen(self.ffmpeg_command, stdout=subprocess.PIPE, bufsize=10 ** 8)
+
+        self.frame_size = self.width * self.height * 2 if not self.convert_rgb else self.width * self.height * 3  # YUY2 format uses 2 bytes per pixel
+
+    def isOpened(self):
+        """
+        Returns True if the FFmpeg process is running, False otherwise.
+        """
+        return self.process is not None and self.process.poll() is None
+
+    def read(self):
+        if not self.isOpened():
+            return False, None
+
+        raw_frame = self.process.stdout.read(self.frame_size)
+
+        if len(raw_frame) == 0:
+            return False, None
+
+        # Handle the frame based on whether we're using YUY2 or BGR format
+        if not self.convert_rgb:
+            # YUY2 format: reshape as (height, width, 2) since YUY2 has 2 bytes per pixel
+            frame = np.frombuffer(raw_frame, np.uint8).reshape((self.height, self.width, 2))
+        else:
+            # BGR format: reshape as (height, width, 3) since BGR has 3 bytes per pixel
+            frame = np.frombuffer(raw_frame, np.uint8).reshape((self.height, self.width, 3))
+
+        return True, frame
+
+    def release(self):
+        # Close the FFmpeg process and its stdout pipe
+        self.process.stdout.close()
+        self.process.wait()
+
+    def get(self, prop_id):
+        """
+        Mimics VideoCapture::get behavior for width, height, and fps.
+        """
+        if prop_id == cv2.CAP_PROP_FRAME_WIDTH:
+            return self.width
+        elif prop_id == cv2.CAP_PROP_FRAME_HEIGHT:
+            return self.height
+        elif prop_id == cv2.CAP_PROP_FPS:
+            return self.framerate
+        else:
+            return None
+
+    def set(self, prop_id, value):
+        """
+        Mimics VideoCapture::set behavior for CAP_PROP_CONVERT_RGB.
+        """
+        if prop_id == cv2.CAP_PROP_CONVERT_RGB:
+            if value == 1:
+                if self.convert_rgb == False:
+                    self.convert_rgb = True
+                    # Restart FFmpeg with RGB conversion
+                    self._restart_ffmpeg()
+            elif value == 0:
+                if self.convert_rgb == True:
+                    self.convert_rgb = False
+                    # Restart FFmpeg without RGB conversion
+                    self._restart_ffmpeg()
+            return True
+        return False
+
+    def _restart_ffmpeg(self):
+        """
+        Restarts the FFmpeg process with updated RGB conversion settings.
+        """
+        # Stop the current process
+        self.release()
+
+        # Adjust FFmpeg command based on convert_rgb setting
+        self.ffmpeg_command[self.ffmpeg_command.index('-pix_fmt') + 1] = 'bgr24' if self.convert_rgb else 'yuyv422'
+
+        # Restart FFmpeg with the new settings
+        self.process = subprocess.Popen(self.ffmpeg_command, stdout=subprocess.PIPE, bufsize=10 ** 8)
+        self.frame_size = self.width * self.height * 2 if not self.convert_rgb else self.width * self.height * 3  # YUY2 format uses 2 bytes per pixel
+
+
 class Video:
     # queue 0 is for GUI, 1 is for recorder
     frame_queue = [queue.Queue(1) for _ in range(2)]
     video_running = False
-
+    cap = None
+    recording = False
     @staticmethod
     def list_cap_ids():
         """
@@ -64,39 +168,71 @@ class Video:
                     return device.get('DEVNAME')
             return None
 
+        #on OSX we can only use ffmpeg to list the devices. all other methods don't quite work.
+        if platform.system() == "Darwin":
+            # FFmpeg command to list devices (macOS example, adjust for Windows/Linux)
+            ffmpeg_command = ['ffmpeg', '-f', 'avfoundation', '-list_devices', 'true', '-i', '']
+            # Run the command and capture the output
+            result = subprocess.run(ffmpeg_command, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+
+            # FFmpeg lists devices to stderr, so we parse stderr
+            output = result.stderr.decode('utf-8')
+
+            # Regular expression to capture the device name and index
+            device_regex = re.compile(r"\[(\d+)\] (.*)")
+
+            # Find all devices
+            devices = device_regex.findall(output)
+
+            # Look for "USB Camera" in the devices list
+            for index, name in devices:
+                if "USB Camera" in name:
+                    print(f"Found USB Camera at index {index}: {name}")
+                    return index
+
+            print("USB Camera not found.")
+            return None
+
         # Fallback that uses the resolution and framerate to identify the device
         working_ids, _, _ = self.list_cap_ids()
+        print(working_ids)
         for id in working_ids:
             if id[1] == P2Pro_resolution and id[2] == P2Pro_fps:
                 return id[0]
         return None
 
     def open(self, camera_id: Union[int, str] = -1):
+        self.recording = True
         if camera_id == -1:
             log.info("No camera ID specified, scanning... (This could take a few seconds)")
             camera_id = self.get_P2Pro_cap_id()
             if camera_id == None:
                 raise ConnectionError(f"Could not find camera module")
 
-        # check if video capture can be opened
-        cap = cv2.VideoCapture(camera_id)
-        if (not cap.isOpened()):
+        if platform.system() == "Darwin":
+            self.cap = FFMpegCapture(camera_id,256,384,convert_rgb=False)
+        else:
+            # check if video capture can be opened
+            self.cap = cv2.VideoCapture(camera_id,cv2)
+
+
+        if (not self.cap.isOpened()):
             raise ConnectionError(f"Could not open video capture device with index {camera_id}, is the module connected?")
 
         # check if resolution and FPS matches that of the P2 Pro module
-        cap_res = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-        cap_fps = cap.get(cv2.CAP_PROP_FPS)
+        cap_res = (int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+        cap_fps = self.cap.get(cv2.CAP_PROP_FPS)
         if (cap_res != P2Pro_resolution or cap_fps != P2Pro_fps):
             raise IndexError(
                 f"Resolution/FPS of camera id {camera_id} doesn't match. It's probably not a P2 Pro. (Got: {cap_res[0]}x{cap_res[1]}@{cap_fps})")
 
         # disable automatic YUY2->RGB conversion of OpenCV
-        cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
+        self.cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
 
         frame_counter = 0
 
-        while True:
-            success, frame = cap.read()
+        while self.recording:
+            success, frame = self.cap.read()
 
             if (not success):
                 continue
@@ -134,6 +270,9 @@ class Video:
 
             frame_counter += 1
 
+    def stop(self):
+        self.recording = False
+        self.cap.release()
 
 if __name__ == "__main__":
     # test stuff
