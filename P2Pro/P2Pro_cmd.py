@@ -34,6 +34,19 @@ class PseudoColorTypes(enum.IntEnum):
     # RED_HOT_MODE = 26
 
 
+class ShutterStaTypes(enum.IntEnum):
+    SHUTTER_CTL_DIS = 0
+    SHUTTER_CTL_EN = 1
+
+class ShutterManualTypes(enum.IntEnum):
+    SHUTTER_OPEN = 0
+    SHUTTER_CLOSE = 1
+
+class OocBUpdateTypes(enum.IntEnum):
+    B_UPDATE = 0 # update B value
+    OOC_UPDATE = 1 # update OOC value
+    OOC_B_UPDATE = 2 # update both B and OOC value
+    
 class PropTpdParams(enum.IntEnum):
     TPD_PROP_DISTANCE = 0   # 1/163.835 m, 0-32767, Distance
     TPD_PROP_TU = 1         # 1 K, 0-1024, Reflection temperature
@@ -42,6 +55,20 @@ class PropTpdParams(enum.IntEnum):
     TPD_PROP_TAU = 4        # 1/127, 0-127, Atmospheric transmittance
     TPD_PROP_GAIN_SEL = 5   # binary, 0-1, Gain select (0=low, 1=high)
 
+class PropAutoShutterParams(enum.IntEnum):
+    SHUTTER_PROP_SWITCH = 0 # Auto shutter update switch. 0:OFF, 1:ON
+    SHUTTER_PROP_MIN_INTERVAL = 1 # Auto shutter minimun interval,to prevent updates too frequently. unit:1s, range:5-655
+    SHUTTER_PROP_MAX_INTERVAL = 2 # Auto shutter maximun interval,shutter updates automatically at this time. unit:1s, range:5-655
+    SHUTTER_PROP_TEMP_THRESHOLD_OOC = 3 # Vtemp's threshold to trigger OOC update in auto shutter.Do OOC update according to the temperature difference between latest update. unit:cnt(36cnt~=1c), range:0-65535
+    SHUTTER_PROP_TEMP_THRESHOLD_B = 4 # Vtemp's threshold to trigger B update in auto shutter.Do B update according to the temperature difference between latest update. unit:cnt(36cnt~=1c), range:0-65535
+    SHUTTER_PROP_PROTECT_SWITCH = 5 # Shutter anti-fall protection switch. 0:OFF, 1:ON
+    SHUTTER_PROP_ANY_INTERVAL = 6 # Manual shutter to auto shutter(or manual shutter)'s minimun interval, to prevent updates too frequently. unit:1s, range:0-655
+    SHUTTER_PROTECT_THR_HIGH_GAIN = 7 # Shutter anti-fall protection threshold in high gain mode.Range:0-65535.
+    SHUTTER_PROTECT_THR_LOW_GAIN = 8 # Shutter anti-fall protection threshold in low gain mode.Range:0-65535.
+    SHUTTER_PREVIEW_START_1ST_DELAY = 9 # Calling shutter's fist delay time after preview start. unit:1s, range:0-655
+    SHUTTER_PREVIEW_START_2ND_DELAY = 10 # Calling shutter's delay time after fist delay. unit:1s, range:0-655
+    SHUTTER_CHANGE_GAIN_1ST_DELAY = 11 # Calling shutter's fist delay time after change gain. unit:1s, range:0-655
+    SHUTTER_CHANGE_GAIN_2ND_DELAY = 12 # Calling shutter's fist delay time after fist delay. unit:1s, range:0-655
 
 class DeviceInfoType(enum.IntEnum):
     DEV_INFO_CHIP_ID = 0
@@ -66,7 +93,13 @@ class CmdCode(enum.IntEnum):
     spi_transfer = 0x8201
     get_device_info = 0x8405
     pseudo_color = 0x8409
+    shutter_sta_set = 0x410c
+    shutter_sta_get = 0x830c
+    auto_shutter_params_set = 0xc214
+    auto_shutter_params_get = 0x8214
+    shutter_switch = 0x420c
     shutter_vtemp = 0x840c
+    ooc_b_update = 0xc10d
     prop_tpd_params = 0x8514
     cur_vtemp = 0x8b0d
     preview_start = 0xc10f
@@ -242,6 +275,67 @@ class P2Pro:
         res = self._standard_cmd_read(CmdCode.pseudo_color, preview_path, 1)
         return PseudoColorTypes(int.from_bytes(res, 'little'))
 
+    def shutter_sta_set(self, sta_type: ShutterStaTypes):
+        self._standard_cmd_write(CmdCode.shutter_sta_set, sta_type)
+
+    def shutter_sta_get(self):
+        res = self._standard_cmd_read(CmdCode.shutter_sta_get, 0, 2)
+        return res[0], res[1]
+    
+    def shutter_switch(self, manual_type: ShutterManualTypes):
+        self._standard_cmd_write(CmdCode.shutter_switch, manual_type)
+    
+    def ooc_b_update(self, update_type: OocBUpdateTypes):
+        self._standard_cmd_write(CmdCode.ooc_b_update, update_type)
+    
+    def shutter_actuate(self):
+        log.info("Shutter")
+        self.shutter_sta_set(ShutterStaTypes.SHUTTER_CTL_EN)
+        self.ooc_b_update(OocBUpdateTypes.B_UPDATE)
+    
+    def shutter_param_set(self):
+        log.info("Shutter parameter set")
+        # ====================================================================
+        # IMPORTANT NOTICE
+        # only set AutoShutterParams, when being aware of the consequences
+        # use this at your own risk
+        # ====================================================================
+        # the next line is an example on how to deactivate auto shutter update
+        #res = self._long_cmd_write(CmdCode.auto_shutter_params_set, PropAutoShutterParams.SHUTTER_PROP_SWITCH, 0)
+    
+    def shutter_params_print(self):
+        log.info("Shutter parameters")
+        for i in range(0, 12):
+            res = self._long_cmd_read(CmdCode.auto_shutter_params_get, i)
+            log.info(PropAutoShutterParams(i).name + ": " + str(res[0]) + " " + str(res[1]));
+    
+    def shutter_background(self):
+        log.info("Shutter background")
+        self.shutter_sta_set(ShutterStaTypes.SHUTTER_CTL_DIS)
+        self.shutter_switch(ShutterManualTypes.SHUTTER_OPEN)
+        self.ooc_b_update(OocBUpdateTypes.B_UPDATE)
+        self.shutter_sta_set(ShutterStaTypes.SHUTTER_CTL_EN)
+    
+    def get_shutter_state(self):
+        sta_type, smt_type = self.shutter_sta_get()
+        if (smt_type == 0): # 0 = closed, 1 = open
+            log.info("Shutter state: closed")
+        else:
+            log.info("Shutter state: open")
+        if (sta_type == ShutterStaTypes.SHUTTER_CTL_DIS):
+            log.info("Shutter control: disabled")
+        else:
+            log.info("Shutter control: enabled")
+        return smt_type, sta_type
+    
+    def gain_set_low(self):
+        log.info("low gain")
+        self.set_prop_tpd_params(PropTpdParams.TPD_PROP_GAIN_SEL, 0)
+    
+    def gain_set_high(self):
+        log.info("high gain")
+        self.set_prop_tpd_params(PropTpdParams.TPD_PROP_GAIN_SEL, 1)
+    
     def set_prop_tpd_params(self, tpd_param: PropTpdParams, value: int):
         self._long_cmd_write(CmdCode.prop_tpd_params | CmdDir.SET, tpd_param, value)
 

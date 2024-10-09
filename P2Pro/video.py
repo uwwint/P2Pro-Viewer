@@ -6,6 +6,8 @@ import subprocess
 import re
 from typing import Union
 
+import P2Pro.P2Pro_cmd as P2Pro_CMD
+
 import cv2
 import numpy as np
 
@@ -17,6 +19,7 @@ P2Pro_fps = 25.0
 P2Pro_usb_id = (0x0bda, 0x5830)  # VID, PID
 
 log = logging.getLogger(__name__)
+log.setLevel(logging.INFO)
 
 
 class FFMpegCapture:
@@ -136,7 +139,11 @@ class Video:
         available_ids = []
         log.info("Probing video capture ports...")
         while len(non_working_ids) < 6:  # if there are more than 5 non working ports stop the testing.
-            camera = cv2.VideoCapture(dev_port)
+            if platform.system() == "Windows":
+                camera = cv2.VideoCapture(dev_port, cv2.CAP_DSHOW)
+            else:
+                camera = cv2.VideoCapture(dev_port)
+
             log.info(f"Testing video capture port {dev_port}... ")
             if not camera.isOpened():
                 log.info("Not working.")
@@ -197,11 +204,11 @@ class Video:
         working_ids, _, _ = self.list_cap_ids()
         print(working_ids)
         for id in working_ids:
-            if id[1] == P2Pro_resolution and id[2] == P2Pro_fps:
+            if id[1] == P2Pro_resolution: # and id[2] == P2Pro_fps:
                 return id[0]
         return None
 
-    def open(self, camera_id: Union[int, str] = -1):
+    def open(self, cam_cmd: P2Pro_CMD.P2Pro, camera_id: Union[int, str] = -1):
         self.recording = True
         if camera_id == -1:
             log.info("No camera ID specified, scanning... (This could take a few seconds)")
@@ -250,7 +257,7 @@ class Video:
 
             # convert buffers to numpy arrays
             yuv_picture = np.frombuffer(picture_data, dtype=np.uint8).reshape((P2Pro_resolution[1] // 2, P2Pro_resolution[0], 2))
-            rgb_picture = cv2.cvtColor(yuv_picture, cv2.COLOR_YUV2RGB_YUY2)
+            rgb_picture = cv2.cvtColor(yuv_picture, cv2.COLOR_YUV2BGR_YUY2)
             thermal_picture_16 = np.frombuffer(thermal_data, dtype=np.uint16).reshape((P2Pro_resolution[1] // 2, P2Pro_resolution[0]))
 
             # pack parsed frame data into object
@@ -282,5 +289,6 @@ if __name__ == "__main__":
     # print(time.time() - start)
     logging.basicConfig()
     log.setLevel(logging.INFO)
-    Video().open()
+    cam_cmd = P2Pro_CMD.P2Pro()
+    Video().open(cam_cmd)
     pass

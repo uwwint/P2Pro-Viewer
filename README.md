@@ -40,8 +40,8 @@ Pergear also has [an international shop](https://www.pergear.com/products/infira
         - [x] "long" cmd
         - [x] wait for camera ready
     - [x] Pseudo color 
-    - [ ] NUC shutter control (auto/manual/trigger)
-    - [ ] High/low temperature range
+    - [X] NUC shutter control (auto/manual/trigger)
+    - [X] High/low temperature range
     - [ ] Other parameters (emissivity, distance, etc)
     - [ ] Switch to actual raw sensor readings?
     - [ ] Recalibrate lens?
